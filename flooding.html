@@ -3,6 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <title>Global Water Level Slider</title>
+    <!-- Ocean wave favicon -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌊</text></svg>"
+    />
     <script src="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Cesium.js"></script>
     <link
       href="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Widgets/widgets.css"
@@ -128,6 +133,18 @@
         id="debugInfo"
         style="font-size: 0.75em; color: #aaa; margin-top: 0.5rem"
       ></p>
+      <p
+        id="testStatus"
+        style="
+          font-size: 0.75em;
+          color: #0f0;
+          margin-top: 0.5rem;
+          display: none;
+        "
+      ></p>
+      <button type="button" id="runTestBtn" style="margin-top: 0.5rem">
+        Run Diagnostic Test
+      </button>
       <button type="button" id="changeTokenBtn">Change Cesium Token</button>
     </div>
 
@@ -429,6 +446,221 @@
       document
         .getElementById('changeTokenBtn')
         .addEventListener('click', clearCesiumToken);
+
+      // ========================================
+      // AUTOMATED DIAGNOSTIC TESTING
+      // ========================================
+      const testStatus = document.getElementById('testStatus');
+      const runTestBtn = document.getElementById('runTestBtn');
+
+      // Test locations with known elevations
+      const TEST_LOCATIONS = [
+        { name: 'Miami Beach', lon: -80.13, lat: 25.79, expectedElev: 2 },
+        { name: 'New Orleans', lon: -90.07, lat: 29.95, expectedElev: -2 },
+        { name: 'Denver CO', lon: -104.99, lat: 39.74, expectedElev: 5280 },
+        { name: 'Death Valley', lon: -116.87, lat: 36.23, expectedElev: -282 },
+        { name: 'Atlantic Ocean', lon: -50.0, lat: 30.0, expectedElev: -15000 },
+        {
+          name: 'Pacific Mariana',
+          lon: 142.2,
+          lat: 11.35,
+          expectedElev: -36000,
+        },
+      ];
+
+      // Test elevations in feet
+      const TEST_ELEVATIONS = [
+        -100, -50, -10, 0, 10, 20, 23, 30, 33, 40, 50, 100, 500, 1000, 5000,
+      ];
+
+      async function sampleTerrainAt(lon, lat) {
+        const cartographic = Cesium.Cartographic.fromDegrees(lon, lat);
+        try {
+          const positions = await Cesium.sampleTerrainMostDetailed(
+            viewer.terrainProvider,
+            [cartographic],
+          );
+          return positions[0].height;
+        } catch (e) {
+          return null;
+        }
+      }
+
+      async function captureScreenshot(filename) {
+        return new Promise((resolve) => {
+          viewer.render();
+          setTimeout(() => {
+            const canvas = viewer.scene.canvas;
+            const dataUrl = canvas.toDataURL('image/png');
+            resolve({ filename, dataUrl });
+          }, 100);
+        });
+      }
+
+      async function getColorAtCenter() {
+        const canvas = viewer.scene.canvas;
+        const ctx = canvas.getContext('webgl2') || canvas.getContext('webgl');
+        const x = Math.floor(canvas.width / 2);
+        const y = Math.floor(canvas.height / 2);
+        const pixels = new Uint8Array(4);
+        ctx.readPixels(x, y, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, pixels);
+        return { r: pixels[0], g: pixels[1], b: pixels[2], a: pixels[3] };
+      }
+
+      async function runDiagnosticTest() {
+        testStatus.style.display = 'block';
+        testStatus.textContent = 'Starting diagnostic test...';
+        runTestBtn.disabled = true;
+
+        const results = {
+          timestamp: new Date().toISOString(),
+          cesiumVersion: Cesium.VERSION,
+          terrainProvider: viewer.terrainProvider.constructor.name,
+          terrainReady: viewer.terrainProvider.ready,
+          globeMaterial: viewer.scene.globe.material ? 'Applied' : 'None',
+          depthTestEnabled: viewer.scene.globe.depthTestAgainstTerrain,
+          locationTests: [],
+          elevationTests: [],
+          screenshots: [],
+        };
+
+        // Test 1: Sample terrain at known locations
+        testStatus.textContent = 'Testing terrain heights at locations...';
+        for (const loc of TEST_LOCATIONS) {
+          const measuredHeight = await sampleTerrainAt(loc.lon, loc.lat);
+          results.locationTests.push({
+            name: loc.name,
+            lon: loc.lon,
+            lat: loc.lat,
+            expectedElevFt: loc.expectedElev,
+            measuredHeightM: measuredHeight,
+            measuredHeightFt:
+              measuredHeight !== null ? measuredHeight / FEET_TO_METERS : null,
+          });
+        }
+
+        // Test 2: Set camera to Miami Beach (low elevation coastal area)
+        testStatus.textContent = 'Moving camera to Miami Beach...';
+        viewer.camera.setView({
+          destination: Cesium.Cartesian3.fromDegrees(-80.13, 25.79, 50000),
+          orientation: { heading: 0, pitch: -0.7, roll: 0 },
+        });
+
+        // Wait for terrain to load
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+
+        // Test 3: Cycle through elevations and capture data
+        for (const elevFt of TEST_ELEVATIONS) {
+          testStatus.textContent = `Testing elevation: ${elevFt} ft...`;
+          updateWaterLevel(elevFt);
+
+          // Wait for render
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          viewer.render();
+          await new Promise((resolve) => setTimeout(resolve, 200));
+
+          // Get terrain height at center
+          let terrainHeightM = null;
+          let terrainHeightFt = null;
+          const ray = viewer.camera.getPickRay(
+            new Cesium.Cartesian2(
+              viewer.canvas.clientWidth / 2,
+              viewer.canvas.clientHeight / 2,
+            ),
+          );
+          if (ray) {
+            const position = viewer.scene.globe.pick(ray, viewer.scene);
+            if (position) {
+              const cartographic = Cesium.Cartographic.fromCartesian(position);
+              terrainHeightM = cartographic.height;
+              terrainHeightFt = terrainHeightM / FEET_TO_METERS;
+            }
+          }
+
+          // Try to get center pixel color
+          let centerColor = null;
+          try {
+            centerColor = await getColorAtCenter();
+          } catch (e) {
+            centerColor = { error: e.message };
+          }
+
+          // Capture screenshot
+          const screenshot = await captureScreenshot(`test_${elevFt}ft.png`);
+
+          results.elevationTests.push({
+            waterLevelFt: elevFt,
+            waterLevelM: elevFt * FEET_TO_METERS,
+            terrainHeightAtCenterM: terrainHeightM,
+            terrainHeightAtCenterFt: terrainHeightFt,
+            centerPixelColor: centerColor,
+            screenshotDataUrl: screenshot.dataUrl,
+          });
+        }
+
+        // Reset to 0
+        updateWaterLevel(0);
+
+        // Generate downloadable JSON report
+        testStatus.textContent = 'Generating report...';
+
+        // Create a version without screenshots for console logging
+        const consoleResults = {
+          ...results,
+          elevationTests: results.elevationTests.map((t) => ({
+            ...t,
+            screenshotDataUrl: '[BASE64_IMAGE_DATA]',
+          })),
+        };
+        console.log('=== DIAGNOSTIC TEST RESULTS ===');
+        console.log(JSON.stringify(consoleResults, null, 2));
+
+        // Create downloadable file
+        const blob = new Blob([JSON.stringify(results, null, 2)], {
+          type: 'application/json',
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'flooding_diagnostic_' + Date.now() + '.json';
+        a.click();
+        URL.revokeObjectURL(url);
+
+        testStatus.textContent =
+          'Test complete! Check console and downloaded JSON file.';
+        runTestBtn.disabled = false;
+
+        // Also log key findings
+        console.log('=== KEY FINDINGS ===');
+        console.log('Terrain heights at test locations:');
+        results.locationTests.forEach((t) => {
+          console.log(
+            `  ${t.name}: Expected ${t.expectedElevFt}ft, Measured ${
+              t.measuredHeightFt !== null
+                ? t.measuredHeightFt.toFixed(1)
+                : 'NULL'
+            }ft`,
+          );
+        });
+        console.log('Elevation band behavior:');
+        results.elevationTests.forEach((t) => {
+          const color = t.centerPixelColor;
+          const colorStr = color.error
+            ? color.error
+            : `R:${color.r} G:${color.g} B:${color.b}`;
+          console.log(
+            `  ${t.waterLevelFt}ft: Terrain=${
+              t.terrainHeightAtCenterFt !== null
+                ? t.terrainHeightAtCenterFt.toFixed(1)
+                : 'NULL'
+            }ft, CenterColor=${colorStr}`,
+          );
+        });
+
+        return results;
+      }
+
+      runTestBtn.addEventListener('click', runDiagnosticTest);
     </script>
   </body>
 </html>
