@@ -20,10 +20,10 @@
         height: 100vh;
       }
 
-      /* Full-width slider at bottom of screen */
+      /* Full-width slider at top of screen */
       #sliderContainer {
         position: absolute;
-        bottom: 0;
+        top: 0;
         left: 0;
         right: 0;
         background: rgba(42, 42, 42, 0.9);
@@ -61,10 +61,10 @@
         font-size: 1.2em;
       }
 
-      /* Floating info panel (top-left) */
+      /* Floating info panel (bottom-left) */
       #infoPanel {
         position: absolute;
-        top: 1.25rem;
+        bottom: 1.25rem;
         left: 1.25rem;
         background: rgba(42, 42, 42, 0.8);
         padding: 0.75rem 1rem;
@@ -107,10 +107,10 @@
     </style>
   </head>
   <body>
-    <!-- Info panel (top-left) -->
+    <!-- Info panel (bottom-left) -->
     <div id="infoPanel">
       <p><strong>Global Flooding Visualization</strong></p>
-      <p>Slide to flood the world or drain the oceans.</p>
+      <p>Use slider or ← → arrow keys (10ft steps)</p>
       <button type="button" id="changeTokenBtn">Change Cesium Token</button>
     </div>
 
@@ -202,40 +202,58 @@
       let waterHeightFeet = 0; // Starting at Sea Level (in feet)
 
       // 5. ELEVATION BAND MATERIAL FOR TERRAIN-BASED FLOODING
-      // This creates a material that colors terrain below water level blue
-      // while preserving satellite imagery for terrain above water level
+      // Key insight: Only show blue for FLOODED areas (land that's underwater)
+      // When water level > 0: Show blue from 0 to water level (flooding land)
+      // When water level <= 0: Show NO blue (draining ocean, reveal bathymetry)
 
       function createFloodMaterial(waterLevelMeters) {
-        // Minimum elevation (well below deepest ocean)
-        const minElevation = -15000; // meters (about -49,000 ft)
+        const layers = [];
 
-        // Create elevation bands:
-        // - Everything below water level: semi-transparent blue (flood water)
-        // - Everything at/above water level: fully transparent (shows satellite imagery)
-        const layers = [
-          {
+        if (waterLevelMeters > 0) {
+          // FLOODING MODE: Water level is above sea level
+          // Color terrain between sea level (0) and water level as flooded
+          layers.push({
             entries: [
               {
-                height: minElevation,
-                color: new Cesium.Color(0.0, 0.3, 0.8, 0.7), // Blue water
+                height: -1, // Just below sea level - transparent (natural ocean)
+                color: new Cesium.Color(0.0, 0.0, 0.0, 0.0),
               },
               {
-                height: waterLevelMeters - 5, // Slight gradient below water line
-                color: new Cesium.Color(0.0, 0.4, 0.9, 0.65), // Slightly lighter blue
+                height: 0, // Sea level - start of flooding
+                color: new Cesium.Color(0.0, 0.4, 0.9, 0.6),
               },
               {
                 height: waterLevelMeters,
-                color: new Cesium.Color(0.0, 0.4, 0.9, 0.6), // Water surface
+                color: new Cesium.Color(0.0, 0.4, 0.9, 0.6), // Flooded water
               },
               {
-                height: waterLevelMeters + 1, // Sharp transition
-                color: new Cesium.Color(0.0, 0.0, 0.0, 0.0), // Fully transparent
+                height: waterLevelMeters + 0.5, // Sharp transition
+                color: new Cesium.Color(0.0, 0.0, 0.0, 0.0), // Above water - transparent
               },
             ],
             extendDownwards: true,
             extendUpwards: true,
-          },
-        ];
+          });
+        }
+        // When water level <= 0: No material (draining mode - show raw bathymetry)
+
+        if (layers.length === 0) {
+          // Return a fully transparent material when draining
+          layers.push({
+            entries: [
+              {
+                height: -15000,
+                color: new Cesium.Color(0.0, 0.0, 0.0, 0.0),
+              },
+              {
+                height: 15000,
+                color: new Cesium.Color(0.0, 0.0, 0.0, 0.0),
+              },
+            ],
+            extendDownwards: true,
+            extendUpwards: true,
+          });
+        }
 
         return Cesium.createElevationBandMaterial({
           scene: viewer.scene,
@@ -243,7 +261,7 @@
         });
       }
 
-      // Apply initial flood material
+      // Apply initial flood material (at sea level = no flooding shown)
       viewer.scene.globe.material = createFloodMaterial(0);
 
       // 6. UI INTERACTION
@@ -266,6 +284,30 @@
 
       slider.addEventListener('input', function () {
         updateWaterLevel(parseFloat(this.value));
+      });
+
+      // Keyboard arrow support for precise 10ft increments
+      // Works when slider is focused OR when pressing arrows anywhere on page
+      const ARROW_INCREMENT = 10; // feet
+      const MIN_LEVEL = -37417;
+      const MAX_LEVEL = 30032;
+
+      function adjustWaterLevel(delta) {
+        let newValue = waterHeightFeet + delta;
+        newValue = Math.max(MIN_LEVEL, Math.min(MAX_LEVEL, newValue));
+        slider.value = newValue;
+        updateWaterLevel(newValue);
+      }
+
+      // Global keyboard listener for arrow keys
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          adjustWaterLevel(ARROW_INCREMENT);
+        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          adjustWaterLevel(-ARROW_INCREMENT);
+        }
       });
 
       // 7. LOCAL STORAGE FOR CAMERA POSITION & WATER LEVEL
