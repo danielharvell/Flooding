@@ -149,41 +149,50 @@
       const FEET_TO_METERS = 0.3048;
       let waterHeightFeet = 0; // Starting at Sea Level (in feet)
 
-      // 5. CUSTOM SHADER FOR TERRAIN-BASED FLOODING
-      // This shader colors terrain below the water level blue
-      const fragmentShaderSource = `
-        uniform float u_waterLevel;
+      // 5. ELEVATION BAND MATERIAL FOR TERRAIN-BASED FLOODING
+      // This creates a material that colors terrain below water level blue
+      // while preserving satellite imagery for terrain above water level
 
-        czm_material czm_getMaterial(czm_materialInput materialInput) {
-          czm_material material = czm_getDefaultMaterial(materialInput);
+      function createFloodMaterial(waterLevelMeters) {
+        // Minimum elevation (well below deepest ocean)
+        const minElevation = -15000; // meters (about -49,000 ft)
 
-          // Get the world position height (elevation above ellipsoid)
-          float height = materialInput.height;
-
-          // If below water level, color it blue
-          if (height < u_waterLevel) {
-            // Water color - semi-transparent blue
-            material.diffuse = vec3(0.0, 0.4, 0.8);
-            material.alpha = 0.75;
-          }
-
-          return material;
-        }
-      `;
-
-      // Create the material
-      const floodMaterial = new Cesium.Material({
-        fabric: {
-          type: 'FloodMaterial',
-          uniforms: {
-            u_waterLevel: 0.0,
+        // Create elevation bands:
+        // - Everything below water level: semi-transparent blue (flood water)
+        // - Everything at/above water level: fully transparent (shows satellite imagery)
+        const layers = [
+          {
+            entries: [
+              {
+                height: minElevation,
+                color: new Cesium.Color(0.0, 0.3, 0.8, 0.7), // Blue water
+              },
+              {
+                height: waterLevelMeters - 5, // Slight gradient below water line
+                color: new Cesium.Color(0.0, 0.4, 0.9, 0.65), // Slightly lighter blue
+              },
+              {
+                height: waterLevelMeters,
+                color: new Cesium.Color(0.0, 0.4, 0.9, 0.6), // Water surface
+              },
+              {
+                height: waterLevelMeters + 1, // Sharp transition
+                color: new Cesium.Color(0.0, 0.0, 0.0, 0.0), // Fully transparent
+              },
+            ],
+            extendDownwards: true,
+            extendUpwards: true,
           },
-          source: fragmentShaderSource,
-        },
-      });
+        ];
 
-      // Apply material to globe
-      viewer.scene.globe.material = floodMaterial;
+        return Cesium.createElevationBandMaterial({
+          scene: viewer.scene,
+          layers: layers,
+        });
+      }
+
+      // Apply initial flood material
+      viewer.scene.globe.material = createFloodMaterial(0);
 
       // 6. UI INTERACTION
       const slider = document.getElementById('heightSlider');
@@ -195,9 +204,10 @@
 
       function updateWaterLevel(feet) {
         waterHeightFeet = feet;
-        // Convert feet to meters and update the shader uniform
+        // Convert feet to meters
         const waterHeightMeters = waterHeightFeet * FEET_TO_METERS;
-        floodMaterial.uniforms.u_waterLevel = waterHeightMeters;
+        // Update the elevation band material
+        viewer.scene.globe.material = createFloodMaterial(waterHeightMeters);
         // Update the text label
         label.innerText = formatNumber(waterHeightFeet) + ' ft';
       }
