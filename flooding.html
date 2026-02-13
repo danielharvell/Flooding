@@ -20,71 +20,122 @@
         height: 100vh;
       }
 
-      /* Floating UI Control */
-      #uiContainer {
+      /* Full-width slider at bottom of screen */
+      #sliderContainer {
         position: absolute;
-        top: 1.25rem;
-        left: 1.25rem;
-        background: rgba(42, 42, 42, 0.8);
-        padding: 0.9375rem;
-        border-radius: 0.5rem;
-        color: white;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(42, 42, 42, 0.9);
+        padding: 0.75rem 1.5rem 1rem 1.5rem;
         z-index: 100;
-        width: 18.75rem;
+        -webkit-backdrop-filter: blur(0.3125rem);
         backdrop-filter: blur(0.3125rem);
       }
-      input[type='range'] {
+      #sliderContainer input[type='range'] {
         width: 100%;
-        margin: 0.625rem 0;
+        margin: 0.5rem 0;
+        height: 8px;
+        cursor: pointer;
       }
-      .label-row {
+      .slider-labels {
         display: flex;
         justify-content: space-between;
-        font-size: 0.9em;
+        font-size: 0.8em;
+        color: #aaa;
+      }
+      .slider-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: white;
+        margin-bottom: 0.25rem;
+      }
+      .slider-header h3 {
+        margin: 0;
+        font-size: 1em;
       }
       #currentHeight {
         font-weight: bold;
         color: #4db8ff;
+        font-size: 1.2em;
+      }
+
+      /* Floating info panel (top-left) */
+      #infoPanel {
+        position: absolute;
+        top: 1.25rem;
+        left: 1.25rem;
+        background: rgba(42, 42, 42, 0.8);
+        padding: 0.75rem 1rem;
+        border-radius: 0.5rem;
+        color: white;
+        z-index: 100;
+        -webkit-backdrop-filter: blur(0.3125rem);
+        backdrop-filter: blur(0.3125rem);
+        font-size: 0.85em;
+      }
+
+      /* Accessibility: visually hidden but screen reader accessible */
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      #infoPanel p {
+        margin: 0.25rem 0;
+      }
+      #changeTokenBtn {
+        margin-top: 0.5rem;
+        padding: 0.3rem 0.6rem;
+        font-size: 0.75em;
+        background: #555;
+        color: #ccc;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      #changeTokenBtn:hover {
+        background: #666;
       }
     </style>
   </head>
   <body>
-    <div id="uiContainer">
-      <h3>Global Water Level</h3>
-      <div class="label-row">
-        <span>Current Level:</span>
+    <!-- Info panel (top-left) -->
+    <div id="infoPanel">
+      <p><strong>Global Flooding Visualization</strong></p>
+      <p>Slide to flood the world or drain the oceans.</p>
+      <button type="button" id="changeTokenBtn">Change Cesium Token</button>
+    </div>
+
+    <!-- Full-width slider (bottom) -->
+    <div id="sliderContainer">
+      <div class="slider-header">
+        <h3>Water Level</h3>
         <span id="currentHeight">0 ft</span>
       </div>
+      <label for="heightSlider" class="visually-hidden"
+        >Water Level Slider</label
+      >
       <input
         type="range"
         id="heightSlider"
         min="-37417"
         max="30032"
         value="0"
-        step="100"
+        step="50"
+        title="Adjust water level"
       />
-      <div class="label-row">
+      <div class="slider-labels">
         <span>-37,417 ft (Deep Ocean)</span>
-        <span>+30,032 ft (Everest)</span>
+        <span>+30,032 ft (Mt. Everest)</span>
       </div>
-      <p style="font-size: 0.8em; color: #aaa; margin-top: 0.625rem">
-        Move slider to flood the world or drain the oceans.
-      </p>
-      <button
-        id="changeTokenBtn"
-        style="
-          margin-top: 0.625rem;
-          padding: 0.3rem 0.6rem;
-          font-size: 0.75em;
-          background: #555;
-          color: #ccc;
-          border: none;
-          border-radius: 4px;
-          cursor: pointer;
-        "
-      >
-        Change Cesium Token
-      </button>
     </div>
 
     <div id="cesiumContainer"></div>
@@ -134,8 +185,9 @@
         timeline: false,
       });
 
-      // Set terrain with async method (new API for Cesium 1.104+)
-      Cesium.CesiumTerrainProvider.fromIonAssetId(1, {
+      // Set terrain with Cesium World Bathymetry (asset ID 2426648)
+      // This includes underwater ocean floor topography
+      Cesium.CesiumTerrainProvider.fromIonAssetId(2426648, {
         requestWaterMask: true,
         requestVertexNormals: true,
       }).then(function (terrainProvider) {
