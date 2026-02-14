@@ -219,15 +219,6 @@
         timeline: false,
       });
 
-      // Set terrain with Cesium World Bathymetry (asset ID 2426648)
-      // This includes underwater ocean floor topography
-      Cesium.CesiumTerrainProvider.fromIonAssetId(2426648, {
-        requestWaterMask: true,
-        requestVertexNormals: true,
-      }).then(function (terrainProvider) {
-        viewer.terrainProvider = terrainProvider;
-      });
-
       // 3. ENABLE DEPTH TESTING
       viewer.scene.globe.depthTestAgainstTerrain = true;
 
@@ -236,6 +227,80 @@
       let waterHeightFeet = 0; // Starting at Sea Level (in feet)
       let terrainReady = false;
       const debugInfo = document.getElementById('debugInfo');
+
+      // Set terrain with Cesium World Bathymetry (asset ID 2426648)
+      // This includes underwater ocean floor topography
+      // IMPORTANT: We must wait for terrain to load before applying elevation band material!
+
+      async function loadTerrain() {
+        const terrainOptions = {
+          requestWaterMask: true,
+          requestVertexNormals: true,
+        };
+
+        // Try Cesium World Bathymetry first (asset ID 2426648)
+        try {
+          console.log(
+            'Attempting to load Cesium World Bathymetry (asset 2426648)...',
+          );
+          debugInfo.textContent = 'Loading Cesium World Bathymetry...';
+          const bathymetryTerrain =
+            await Cesium.CesiumTerrainProvider.fromIonAssetId(
+              2426648,
+              terrainOptions,
+            );
+          viewer.terrainProvider = bathymetryTerrain;
+          console.log('✓ Cesium World Bathymetry loaded successfully');
+          debugInfo.textContent = 'Terrain: Cesium World Bathymetry ✓';
+        } catch (bathymetryError) {
+          console.warn(
+            'Failed to load Cesium World Bathymetry:',
+            bathymetryError,
+          );
+          console.log(
+            'Falling back to standard Cesium World Terrain (asset 1)...',
+          );
+          debugInfo.textContent =
+            'Bathymetry unavailable, loading World Terrain...';
+
+          // Fall back to standard Cesium World Terrain (asset ID 1)
+          try {
+            const worldTerrain =
+              await Cesium.CesiumTerrainProvider.fromIonAssetId(
+                1,
+                terrainOptions,
+              );
+            viewer.terrainProvider = worldTerrain;
+            console.log('✓ Cesium World Terrain loaded successfully');
+            debugInfo.textContent = 'Terrain: Cesium World Terrain ✓';
+          } catch (terrainError) {
+            console.error('Failed to load any terrain:', terrainError);
+            debugInfo.textContent = 'ERROR: Failed to load terrain!';
+            alert(
+              'Failed to load terrain data. Please check your Cesium ion access token and ensure it is valid.',
+            );
+            return; // Don't apply flood material if no terrain
+          }
+        }
+
+        // Terrain loaded successfully - now apply flood material
+        terrainReady = true;
+        console.log('Terrain ready, applying flood material...');
+        viewer.scene.globe.material = createFloodMaterial(
+          waterHeightFeet * FEET_TO_METERS,
+        );
+        console.log(
+          'Flood material applied with water level:',
+          waterHeightFeet,
+          'ft',
+        );
+
+        // Update debug info with terrain height after a delay
+        setTimeout(updateDebugInfo, 2000);
+      }
+
+      // Start loading terrain
+      loadTerrain();
 
       // 5. SATELLITE IMAGERY TOGGLE
       const imageryToggle = document.getElementById('toggleImagery');
@@ -256,52 +321,76 @@
         }
       });
 
-      // 6. ELEVATION BAND MATERIAL FOR TERRAIN-BASED FLOODING
-      // This colors terrain below the water level with a blue overlay.
-      // The key is using a gradient that transitions sharply at the water line.
+      // 6. CUSTOM MATERIAL SHADER FOR TERRAIN-BASED FLOODING
+      // This uses materialInput.height to access actual terrain elevation
+      // and compares it to the water level to determine flooding.
+      // Based on approach from Cesium Community forum by Sean Lilley.
+
+      // Create a color ramp canvas for the elevation ramp
+      function createColorRampCanvas(waterLevelMeters) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 1;
+        const ctx = canvas.getContext('2d');
+
+        // Create gradient from deep ocean to surface to land (transparent)
+        const gradient = ctx.createLinearGradient(0, 0, 256, 0);
+
+        // Calculate positions: 0 = minHeight, 1 = maxHeight
+        const minHeight = -12000; // meters
+        const maxHeight = 10000; // meters
+        const range = maxHeight - minHeight;
+
+        // Water level normalized position
+        const waterPos = (waterLevelMeters - minHeight) / range;
+        const waterPosSlightlyBelow = Math.max(0, waterPos - 0.001);
+        const waterPosSlightlyAbove = Math.min(1, waterPos + 0.001);
+
+        // Deep ocean - dark blue
+        gradient.addColorStop(0, 'rgba(0, 30, 80, 0.8)');
+
+        // Mid ocean - medium blue
+        if (waterPosSlightlyBelow > 0.01) {
+          gradient.addColorStop(
+            waterPosSlightlyBelow * 0.5,
+            'rgba(0, 60, 140, 0.7)',
+          );
+        }
+
+        // Just below water surface - lighter blue
+        gradient.addColorStop(
+          Math.max(0.01, waterPosSlightlyBelow),
+          'rgba(0, 100, 200, 0.6)',
+        );
+
+        // Sharp transition at water level
+        gradient.addColorStop(waterPos, 'rgba(0, 120, 220, 0.5)');
+        gradient.addColorStop(waterPosSlightlyAbove, 'rgba(0, 0, 0, 0)');
+
+        // Above water - fully transparent
+        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 256, 1);
+
+        return canvas;
+      }
 
       function createFloodMaterial(waterLevelMeters) {
-        // Use a very deep minimum to cover all ocean floor
-        const minElevation = -12000; // meters (about -39,000 ft)
+        const minHeight = -12000; // meters (about -39,000 ft)
+        const maxHeight = 10000; // meters (about +32,800 ft)
 
-        // Create elevation bands with a sharp transition at water level
-        const layers = [
-          {
-            entries: [
-              {
-                height: minElevation,
-                color: new Cesium.Color(0.0, 0.3, 0.8, 0.7), // Deep water blue
-              },
-              {
-                height: waterLevelMeters - 10, // 10m below water line
-                color: new Cesium.Color(0.0, 0.35, 0.85, 0.65),
-              },
-              {
-                height: waterLevelMeters - 2, // Near water surface
-                color: new Cesium.Color(0.0, 0.4, 0.9, 0.6),
-              },
-              {
-                height: waterLevelMeters, // Water surface
-                color: new Cesium.Color(0.0, 0.45, 0.95, 0.55),
-              },
-              {
-                height: waterLevelMeters + 0.5, // Sharp transition
-                color: new Cesium.Color(0.0, 0.0, 0.0, 0.0), // Fully transparent
-              },
-            ],
-            extendDownwards: true,
-            extendUpwards: true,
-          },
-        ];
-
-        return Cesium.createElevationBandMaterial({
-          scene: viewer.scene,
-          layers: layers,
+        // Use ElevationRamp material type which is built into CesiumJS
+        // and properly samples terrain height
+        return Cesium.Material.fromType('ElevationRamp', {
+          image: createColorRampCanvas(waterLevelMeters),
+          minimumHeight: minHeight,
+          maximumHeight: maxHeight,
         });
       }
 
-      // Apply initial flood material
-      viewer.scene.globe.material = createFloodMaterial(0);
+      // NOTE: Initial flood material is now applied in the terrain provider callback above
+      // to ensure terrain is loaded before applying the elevation band material.
 
       // Update debug info with terrain height at camera look point
       function updateDebugInfo() {

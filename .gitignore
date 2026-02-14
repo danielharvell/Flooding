@@ -1,0 +1,21 @@
+# Cesium ion token (contains API key)
+.cesium_token
+
+# Test artifacts
+test_screenshots/
+test_results.json
+*_analysis.json
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
